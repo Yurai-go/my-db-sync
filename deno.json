@@ -1,0 +1,6 @@
+{
+  "unstable": ["cron"],
+  "tasks": {
+    "start": "deno run --allow-env --allow-net --unstable-cron cron.ts"
+  }
+}
