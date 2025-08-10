@@ -18,12 +18,9 @@ const db2 = createClient(
   Deno.env.get("DB2_SERVICE_ROLE_KEY") ?? ""
 );
 
-/**
- * Synchronizes nonfiction books from DB1 → DB2, skipping existing IDs.
- */
+// === CORE SYNC FUNCTION ===
 export async function syncFilteredBooks(): Promise<string> {
   console.log(`[${new Date().toISOString()}] 🔄 Starting syncFilteredBooks`);
-
   try {
     // 1. Fetch from DB1
     const { data: books, error: errorDb1 } = await db1
@@ -56,24 +53,19 @@ export async function syncFilteredBooks(): Promise<string> {
     return `✅ Synced ${newBooks.length} books to DB2.`;
   } catch (err) {
     console.error(`[${new Date().toISOString()}] ❌ syncFilteredBooks failed:`, err);
-    throw err;
+    return `❌ Error: ${err.message}`;
   }
 }
 
-// === LOCAL_RUN MODE ===
-// Run the function once locally and exit (no HTTP server)
-if (import.meta.main && Deno.env.get("LOCAL_RUN") === "true") {
-  console.log(await syncFilteredBooks());
-  Deno.exit(0);
-}
-
-// === DEFAULT: HTTP HANDLER ===
-// Used by Deno Deploy or local testing via HTTP
+// === HTTP HANDLER ===
+// Always start exactly ONE HTTP server on Deno Deploy
 Deno.serve(async (_req) => {
-  try {
-    const result = await syncFilteredBooks();
-    return new Response(result, { status: 200 });
-  } catch (err) {
-    return new Response("❌ Error: " + err.message, { status: 500 });
-  }
+  const result = await syncFilteredBooks();
+  return new Response(result, { status: 200 });
 });
+
+// === LOCAL DEV MODE ===
+// Run once without HTTP server if LOCAL_RUN=true
+if (!Deno.env.get("DENO_DEPLOYMENT_ID") && Deno.env.get("LOCAL_RUN") === "true") {
+  console.log(await syncFilteredBooks());
+}
