@@ -1,7 +1,6 @@
 // === IMPORT LIBRARIES ===
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "https://deno.land/std@0.168.0/dotenv/load.ts";
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // === DB1 CONFIG (source) ===
 const db1 = createClient(
@@ -61,7 +60,7 @@ export async function syncFilteredBooks(): Promise<string> {
   }
 }
 
-// === Deno Deploy-compatible HTTP handler ===
+// === HTTP handler (Deno Deploy uses this for warm-up & triggers) ===
 Deno.serve(async (_req) => {
   try {
     const result = await syncFilteredBooks();
@@ -70,3 +69,8 @@ Deno.serve(async (_req) => {
     return new Response("❌ Error: " + err.message, { status: 500 });
   }
 });
+
+// === Allow local execution ===
+if (import.meta.main && Deno.env.get("LOCAL_RUN") === "true") {
+  console.log(await syncFilteredBooks());
+}
