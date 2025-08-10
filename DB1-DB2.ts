@@ -4,7 +4,6 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // Load .env only in local/dev mode
 if (!Deno.env.get("DENO_DEPLOYMENT_ID")) {
-  // No await — prevents blocking startup
   import("https://deno.land/std@0.168.0/dotenv/load.ts")
     .catch(() => console.warn("No .env file found (local mode)"));
 }
@@ -54,13 +53,22 @@ export async function syncFilteredBooks(): Promise<string> {
   }
 }
 
-// === HTTP HANDLER ===
-serve(async (_req) => {
-  const result = await syncFilteredBooks();
-  return new Response(result, { status: 200 });
-});
+// === HTTP HANDLER (Deploy + local server mode) ===
+if (Deno.env.get("DENO_DEPLOYMENT_ID") || Deno.env.get("LOCAL_SERVER") === "true") {
+  serve(async (req) => {
+    const url = new URL(req.url);
 
-// === LOCAL DEV MODE ===
+    if (url.pathname === "/sync") {
+      const result = await syncFilteredBooks();
+      return new Response(result, { status: 200 });
+    }
+
+    // Health check endpoint for warm-up
+    return new Response("OK", { status: 200 });
+  });
+}
+
+// === LOCAL DEV DIRECT EXECUTION ===
 if (!Deno.env.get("DENO_DEPLOYMENT_ID") && Deno.env.get("LOCAL_RUN") === "true") {
   syncFilteredBooks().then(console.log);
 }
