@@ -1,18 +1,20 @@
 // === IMPORT LIBRARIES ===
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
-// Load .env only in local/dev mode (not in Deno Deploy)
+// Load .env only in local/dev mode
 if (!Deno.env.get("DENO_DEPLOYMENT_ID")) {
-  await import("https://deno.land/std@0.168.0/dotenv/load.ts");
+  // No await — prevents blocking startup
+  import("https://deno.land/std@0.168.0/dotenv/load.ts")
+    .catch(() => console.warn("No .env file found (local mode)"));
 }
 
-// === DB1 CONFIG (source) ===
+// === DB CONFIG ===
 const db1 = createClient(
   Deno.env.get("DB1_URL") ?? "",
   Deno.env.get("DB1_SERVICE_ROLE_KEY") ?? ""
 );
 
-// === DB2 CONFIG (destination) ===
 const db2 = createClient(
   Deno.env.get("DB2_URL") ?? "",
   Deno.env.get("DB2_SERVICE_ROLE_KEY") ?? ""
@@ -22,7 +24,6 @@ const db2 = createClient(
 export async function syncFilteredBooks(): Promise<string> {
   console.log(`[${new Date().toISOString()}] 🔄 Starting syncFilteredBooks`);
   try {
-    // 1. Fetch from DB1
     const { data: books, error: errorDb1 } = await db1
       .from("books_nonfiction")
       .select("id, title, author");
@@ -30,7 +31,6 @@ export async function syncFilteredBooks(): Promise<string> {
     if (errorDb1) throw new Error(`DB1 Fetch Error: ${errorDb1.message}`);
     if (!books?.length) return "No books to sync.";
 
-    // 2. Fetch existing IDs from DB2
     const { data: existing, error: errorDb2Fetch } = await db2
       .from("filtered_books")
       .select("id");
@@ -38,12 +38,9 @@ export async function syncFilteredBooks(): Promise<string> {
     if (errorDb2Fetch) throw new Error(`DB2 Fetch Error: ${errorDb2Fetch.message}`);
 
     const existingIds = new Set((existing ?? []).map((b) => b.id));
-
-    // 3. Filter only new entries
     const newBooks = books.filter((b) => !existingIds.has(b.id));
     if (!newBooks.length) return "No new books to insert.";
 
-    // 4. Insert to DB2
     const { error: errorDb2Insert } = await db2
       .from("filtered_books")
       .insert(newBooks);
@@ -58,14 +55,12 @@ export async function syncFilteredBooks(): Promise<string> {
 }
 
 // === HTTP HANDLER ===
-// Always start exactly ONE HTTP server on Deno Deploy
-Deno.serve(async (_req) => {
+serve(async (_req) => {
   const result = await syncFilteredBooks();
   return new Response(result, { status: 200 });
 });
 
 // === LOCAL DEV MODE ===
-// Run once without HTTP server if LOCAL_RUN=true
 if (!Deno.env.get("DENO_DEPLOYMENT_ID") && Deno.env.get("LOCAL_RUN") === "true") {
-  console.log(await syncFilteredBooks());
+  syncFilteredBooks().then(console.log);
 }
