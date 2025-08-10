@@ -2,7 +2,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // Load .env only in local/dev mode (not in Deno Deploy)
-if (Deno.env.get("DENO_DEPLOYMENT_ID") === undefined) {
+if (!Deno.env.get("DENO_DEPLOYMENT_ID")) {
   await import("https://deno.land/std@0.168.0/dotenv/load.ts");
 }
 
@@ -31,9 +31,7 @@ export async function syncFilteredBooks(): Promise<string> {
       .select("id, title, author");
 
     if (errorDb1) throw new Error(`DB1 Fetch Error: ${errorDb1.message}`);
-    if (!books || books.length === 0) {
-      return "No books to sync.";
-    }
+    if (!books?.length) return "No books to sync.";
 
     // 2. Fetch existing IDs from DB2
     const { data: existing, error: errorDb2Fetch } = await db2
@@ -46,9 +44,7 @@ export async function syncFilteredBooks(): Promise<string> {
 
     // 3. Filter only new entries
     const newBooks = books.filter((b) => !existingIds.has(b.id));
-    if (newBooks.length === 0) {
-      return "No new books to insert.";
-    }
+    if (!newBooks.length) return "No new books to insert.";
 
     // 4. Insert to DB2
     const { error: errorDb2Insert } = await db2
@@ -64,7 +60,15 @@ export async function syncFilteredBooks(): Promise<string> {
   }
 }
 
-// === HTTP handler ===
+// === LOCAL_RUN MODE ===
+// Run the function once locally and exit (no HTTP server)
+if (import.meta.main && Deno.env.get("LOCAL_RUN") === "true") {
+  console.log(await syncFilteredBooks());
+  Deno.exit(0);
+}
+
+// === DEFAULT: HTTP HANDLER ===
+// Used by Deno Deploy or local testing via HTTP
 Deno.serve(async (_req) => {
   try {
     const result = await syncFilteredBooks();
@@ -73,8 +77,3 @@ Deno.serve(async (_req) => {
     return new Response("❌ Error: " + err.message, { status: 500 });
   }
 });
-
-// === Local run option ===
-if (import.meta.main && Deno.env.get("LOCAL_RUN") === "true") {
-  console.log(await syncFilteredBooks());
-}
