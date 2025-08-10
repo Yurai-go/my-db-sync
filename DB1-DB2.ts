@@ -61,8 +61,8 @@ export async function syncFilteredBooks(): Promise<string> {
   }
 }
 
-// === HTTP handler (needed for Deno Deploy warm-up & manual trigger) ===
-serve(async (_req) => {
+// === Deno Deploy-compatible HTTP handler ===
+Deno.serve(async (_req) => {
   try {
     const result = await syncFilteredBooks();
     return new Response(result, { status: 200 });
@@ -70,8 +70,3 @@ serve(async (_req) => {
     return new Response("❌ Error: " + err.message, { status: 500 });
   }
 });
-
-// === Allow direct execution locally ===
-if (import.meta.main) {
-  console.log(await syncFilteredBooks());
-}
