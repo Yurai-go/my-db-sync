@@ -115,7 +115,7 @@ Deno.serve(async (req) => {
     - GET /sync - Manually trigger sync
     - GET /health - Health check
     
-    Automatic sync runs daily at 16:10 WIB (Indonesian Western Time)
+    Automatic sync runs daily at 16:30 WIB (Indonesian Western Time)
   `, { 
     status: 200,
     headers: { "Content-Type": "text/plain" }
