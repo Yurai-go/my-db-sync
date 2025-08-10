@@ -1,6 +1,9 @@
 {
   "unstable": ["cron"],
   "tasks": {
-    "start": "deno run --allow-env --allow-net --unstable-cron cron.ts"
+    "start": "deno run --allow-env --allow-net --unstable-cron cron.ts",
+    "dev": "deno run --allow-env --allow-net --unstable-cron --watch cron.ts",
+    "test-sync": "LOCAL_RUN=true deno run --allow-env --allow-net --allow-read DB1-DB2.ts",
+    "serve": "deno run --allow-env --allow-net DB1-DB2.ts"
   }
 }

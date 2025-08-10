@@ -1,3 +1,4 @@
+// DB1-DB2.ts
 // === IMPORT LIBRARIES ===
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -34,7 +35,14 @@ const db2 = createClient(db2Url, db2Key);
 
 // === CORE SYNC FUNCTION ===
 export async function syncFilteredBooks(): Promise<string> {
-  console.log(`[${new Date().toISOString()}] 🔄 Starting syncFilteredBooks`);
+  const startTime = Date.now();
+  const localTime = new Date().toLocaleString("id-ID", { 
+    timeZone: "Asia/Jakarta",
+    dateStyle: "short",
+    timeStyle: "medium"
+  });
+  
+  console.log(`[${new Date().toISOString()}] 🔄 Starting syncFilteredBooks at ${localTime} WIB`);
   
   try {
     // 1. Fetch from DB1
@@ -43,7 +51,12 @@ export async function syncFilteredBooks(): Promise<string> {
       .select("id, title, author");
     
     if (errorDb1) throw new Error(`DB1 Fetch Error: ${errorDb1.message}`);
-    if (!books?.length) return "No books to sync.";
+    if (!books?.length) {
+      console.log("No books found in source database");
+      return "No books to sync.";
+    }
+    
+    console.log(`Found ${books.length} total books in DB1`);
     
     // 2. Fetch existing IDs from DB2
     const { data: existing, error: errorDb2Fetch } = await db2
@@ -53,10 +66,16 @@ export async function syncFilteredBooks(): Promise<string> {
     if (errorDb2Fetch) throw new Error(`DB2 Fetch Error: ${errorDb2Fetch.message}`);
     
     const existingIds = new Set((existing ?? []).map((b) => b.id));
+    console.log(`Found ${existingIds.size} existing books in DB2`);
     
     // 3. Filter only new entries
     const newBooks = books.filter((b) => !existingIds.has(b.id));
-    if (!newBooks.length) return "No new books to insert.";
+    if (!newBooks.length) {
+      console.log("All books are already synced");
+      return "No new books to insert.";
+    }
+    
+    console.log(`Found ${newBooks.length} new books to sync`);
     
     // 4. Insert to DB2
     const { error: errorDb2Insert } = await db2
@@ -65,39 +84,92 @@ export async function syncFilteredBooks(): Promise<string> {
     
     if (errorDb2Insert) throw new Error(`DB2 Insert Error: ${errorDb2Insert.message}`);
     
-    return `✅ Synced ${newBooks.length} books to DB2.`;
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    const successMessage = `✅ Synced ${newBooks.length} books to DB2 in ${duration}s`;
+    console.log(successMessage);
+    return successMessage;
+    
   } catch (err: any) {
     console.error(`[${new Date().toISOString()}] ❌ syncFilteredBooks failed:`, err);
     return `❌ Error: ${err.message}`;
   }
 }
 
-// === HTTP HANDLER ===
-// Check if we're in Deno Deploy or local dev with server mode
-const isDeployment = !!Deno.env.get("DENO_DEPLOYMENT_ID");
-const isLocalServer = !isDeployment && Deno.env.get("LOCAL_RUN") !== "true";
-
-if (isDeployment || isLocalServer) {
-  // Start HTTP server for Deno Deploy or local server mode
-  Deno.serve(async (_req) => {
-    try {
-      const result = await syncFilteredBooks();
-      return new Response(result, { 
+// === HTTP HANDLER (Optional for manual triggers) ===
+// Only start if running directly (not when imported by cron.ts)
+if (import.meta.main) {
+  Deno.serve(async (req) => {
+    const url = new URL(req.url);
+    
+    // Manual trigger endpoint
+    if (url.pathname === "/sync") {
+      try {
+        const result = await syncFilteredBooks();
+        return new Response(result, { 
+          status: 200,
+          headers: { "Content-Type": "text/plain" }
+        });
+      } catch (error: any) {
+        return new Response(`Error: ${error.message}`, { 
+          status: 500,
+          headers: { "Content-Type": "text/plain" }
+        });
+      }
+    }
+    
+    // Health check endpoint
+    if (url.pathname === "/health") {
+      return new Response("OK", { 
         status: 200,
         headers: { "Content-Type": "text/plain" }
       });
-    } catch (error: any) {
-      return new Response(`Error: ${error.message}`, { 
-        status: 500,
-        headers: { "Content-Type": "text/plain" }
-      });
     }
+    
+    // Default response
+    const localTime = new Date().toLocaleString("id-ID", { 
+      timeZone: "Asia/Jakarta",
+      dateStyle: "short",
+      timeStyle: "medium"
+    });
+    
+    return new Response(`
+      Available endpoints:
+      - GET /sync - Manually trigger sync
+      - GET /health - Health check
+      
+      Current time: ${localTime} WIB
+      Automatic sync runs daily at 16:30 WIB (Indonesian Western Time)
+      Next sync: ${getNextSyncTime()}
+    `, { 
+      status: 200,
+      headers: { "Content-Type": "text/plain" }
+    });
+  });
+}
+
+// Helper function to calculate next sync time
+function getNextSyncTime(): string {
+  const now = new Date();
+  const next = new Date();
+  
+  // Set to 16:30 Jakarta time
+  next.setUTCHours(9, 30, 0, 0); // 09:30 UTC = 16:30 WIB
+  
+  // If we've already passed today's sync time, move to tomorrow
+  if (next <= now) {
+    next.setDate(next.getDate() + 1);
+  }
+  
+  return next.toLocaleString("id-ID", { 
+    timeZone: "Asia/Jakarta",
+    dateStyle: "short",
+    timeStyle: "medium"
   });
 }
 
 // === LOCAL DEV MODE ===
-// Run once without HTTP server if LOCAL_RUN=true
-if (!isDeployment && Deno.env.get("LOCAL_RUN") === "true") {
+// Run once if LOCAL_RUN=true (for testing locally)
+if (!Deno.env.get("DENO_DEPLOYMENT_ID") && Deno.env.get("LOCAL_RUN") === "true") {
   try {
     const result = await syncFilteredBooks();
     console.log(result);
