@@ -1,35 +1,28 @@
 // === IMPORT LIBRARIES ===
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
-// === LOAD .ENV FOR LOCAL ONLY ===
+// Load .env only in local/dev mode (not in Deno Deploy)
 if (!Deno.env.get("DENO_DEPLOYMENT_ID")) {
-  try {
-    await import("https://deno.land/std@0.168.0/dotenv/load.ts");
-    console.log("✅ .env loaded (local mode)");
-  } catch {
-    console.warn("⚠️ No .env file found (local mode)");
-  }
+  await import("https://deno.land/std@0.168.0/dotenv/load.ts");
 }
 
-// === ENVIRONMENT VALIDATION ===
-function getEnv(name: string): string {
-  const value = Deno.env.get(name);
-  if (!value) {
-    throw new Error(`Missing required env var: ${name}`);
-  }
-  return value;
-}
+// === DB1 CONFIG (source) ===
+const db1 = createClient(
+  Deno.env.get("DB1_URL") ?? "",
+  Deno.env.get("DB1_SERVICE_ROLE_KEY") ?? ""
+);
 
-// === DB CONFIG ===
-const db1 = createClient(getEnv("DB1_URL"), getEnv("DB1_SERVICE_ROLE_KEY"));
-const db2 = createClient(getEnv("DB2_URL"), getEnv("DB2_SERVICE_ROLE_KEY"));
+// === DB2 CONFIG (destination) ===
+const db2 = createClient(
+  Deno.env.get("DB2_URL") ?? "",
+  Deno.env.get("DB2_SERVICE_ROLE_KEY") ?? ""
+);
 
 // === CORE SYNC FUNCTION ===
 export async function syncFilteredBooks(): Promise<string> {
   console.log(`[${new Date().toISOString()}] 🔄 Starting syncFilteredBooks`);
   try {
-    // Fetch from DB1
+    // 1. Fetch from DB1
     const { data: books, error: errorDb1 } = await db1
       .from("books_nonfiction")
       .select("id, title, author");
@@ -37,19 +30,20 @@ export async function syncFilteredBooks(): Promise<string> {
     if (errorDb1) throw new Error(`DB1 Fetch Error: ${errorDb1.message}`);
     if (!books?.length) return "No books to sync.";
 
-    // Fetch from DB2
+    // 2. Fetch existing IDs from DB2
     const { data: existing, error: errorDb2Fetch } = await db2
       .from("filtered_books")
       .select("id");
 
     if (errorDb2Fetch) throw new Error(`DB2 Fetch Error: ${errorDb2Fetch.message}`);
 
-    // Determine new books
     const existingIds = new Set((existing ?? []).map((b) => b.id));
+
+    // 3. Filter only new entries
     const newBooks = books.filter((b) => !existingIds.has(b.id));
     if (!newBooks.length) return "No new books to insert.";
 
-    // Insert new books
+    // 4. Insert to DB2
     const { error: errorDb2Insert } = await db2
       .from("filtered_books")
       .insert(newBooks);
@@ -63,26 +57,30 @@ export async function syncFilteredBooks(): Promise<string> {
   }
 }
 
-// === HTTP SERVER (DEPLOY + LOCAL SERVER) ===
-serve(async (req) => {
-  const url = new URL(req.url);
+// === MAIN ENTRY POINT ===
+async function main() {
+  const isDeployed = Boolean(Deno.env.get("DENO_DEPLOYMENT_ID"));
+  const isLocalRun = Deno.env.get("LOCAL_RUN") === "true";
 
-  // Health check / warm-up — instant response
-  if (url.pathname === "/") {
-    return new Response("OK", { status: 200 });
+  if (isLocalRun) {
+    // Local run mode - execute sync and exit
+    console.log(await syncFilteredBooks());
+  } else if (isDeployed) {
+    // Production mode - start HTTP server
+    Deno.serve(async (_req) => {
+      const result = await syncFilteredBooks();
+      return new Response(result, { status: 200 });
+    });
+  } else {
+    // Development mode (non-local-run) - start HTTP server
+    Deno.serve(async (_req) => {
+      const result = await syncFilteredBooks();
+      return new Response(result, { status: 200 });
+    });
   }
+}
 
-  // Trigger sync manually
-  if (url.pathname === "/sync") {
-    const result = await syncFilteredBooks();
-    return new Response(result, { status: 200 });
-  }
-
-  // Not found
-  return new Response("Not Found", { status: 404 });
-});
-
-// === LOCAL DEV: Auto-run sync if LOCAL_RUN=true ===
-if (!Deno.env.get("DENO_DEPLOYMENT_ID") && Deno.env.get("LOCAL_RUN") === "true") {
-  syncFilteredBooks().then(console.log);
+// Only execute if this is the main module
+if (import.meta.main) {
+  await main();
 }
