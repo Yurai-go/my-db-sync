@@ -1,9 +1,33 @@
 {
+  "compilerOptions": {
+    "allowJs": true,
+    "lib": ["deno.window"],
+    "strict": true
+  },
   "unstable": ["cron"],
   "tasks": {
-    "start": "deno run --allow-env --allow-net --unstable-cron cron.ts",
-    "dev": "deno run --allow-env --allow-net --unstable-cron --watch cron.ts",
-    "test-sync": "LOCAL_RUN=true deno run --allow-env --allow-net --allow-read DB1-DB2.ts",
-    "serve": "deno run --allow-env --allow-net DB1-DB2.ts"
+    "start": "deno run --allow-env --allow-net --allow-read --unstable-cron cron.ts",
+    "dev": "deno run --allow-env --allow-net --allow-read --unstable-cron --watch cron.ts",
+    "serve": "deno run --allow-env --allow-net --allow-read --unstable-cron DB1-DB2.ts",
+    "test-sync": "LOCAL_RUN=true deno run --allow-env --allow-net --allow-read --unstable-cron DB1-DB2.ts",
+    "manual-sync": "deno run --allow-env --allow-net --allow-read --unstable-cron -e 'import {syncFilteredBooks} from \"./DB1-DB2.ts\"; console.log(await syncFilteredBooks());'",
+    "check-env": "deno run --allow-env --allow-read -e 'await import(\"https://deno.land/std@0.168.0/dotenv/load.ts\"); console.log(\"DB1_URL:\", Deno.env.get(\"DB1_URL\") ? \"✅ Set\" : \"❌ Missing\"); console.log(\"DB2_URL:\", Deno.env.get(\"DB2_URL\") ? \"✅ Set\" : \"❌ Missing\");'"
+  },
+  "imports": {
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2",
+    "@std/dotenv": "https://deno.land/std@0.168.0/dotenv/load.ts"
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"]
+    }
+  },
+  "fmt": {
+    "useTabs": false,
+    "lineWidth": 100,
+    "indentWidth": 2,
+    "semiColons": true,
+    "singleQuote": false,
+    "proseWrap": "preserve"
   }
 }
