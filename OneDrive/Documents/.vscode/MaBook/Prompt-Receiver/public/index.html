@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Book Recommendations</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    animation: {
+                        'spin': 'spin 1s linear infinite',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .search-input {
+            resize: none;
+        }
+        .search-input::-webkit-scrollbar {
+            width: 4px;
+        }
+        .search-input::-webkit-scrollbar-track {
+            background: #2a2a2a;
+        }
+        .search-input::-webkit-scrollbar-thumb {
+            background: #666;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body class="font-sans bg-black min-h-screen p-5">
+    <div class="max-w-4xl mx-auto">
+        <!-- Header -->
+        <div class="text-center text-white mb-10">
+            <h1 class="text-4xl mb-2.5 drop-shadow-lg">📚 AI Book Recommendations</h1>
+            <p class="text-lg opacity-90">Get personalized book recommendations powered by AI</p>
+        </div>
+
+        <!-- Search Container -->
+        <div class="mb-8">
+            <div class="relative mb-5">
+                <textarea 
+                    class="search-input w-full py-5 pr-16 pl-6 text-base border-2 border-white border-opacity-80 rounded-3xl bg-gray-800 text-white transition-all duration-300 min-h-[60px] max-h-[200px] overflow-y-auto leading-relaxed focus:outline-none focus:border-white focus:bg-gray-700 placeholder-white placeholder-opacity-70" 
+                    id="promptInput" 
+                    placeholder="Ask me anything about books you'd like to read..." 
+                    rows="1">
+                </textarea>
+                <button 
+                    class="send-btn absolute right-2.5 bottom-2.5 w-10 h-10 border-0 rounded-lg bg-gray-800 text-white cursor-pointer flex items-center justify-center transition-all duration-300 hover:bg-gray-600 hover:scale-110 disabled:bg-gray-600 disabled:cursor-not-allowed disabled:transform-none" 
+                    id="sendBtn">
+                    <svg viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5">
+                        <path d="M8 5v14l11-7z"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Loading -->
+        <div class="loading hidden text-center text-white text-lg my-5" id="loading">
+            <div class="border-4 border-white border-opacity-30 border-t-white rounded-full w-8 h-8 animate-spin mx-auto mb-2.5"></div>
+            <p>AI is analyzing your request and finding the best book recommendations...</p>
+        </div>
+
+        <!-- Results Container -->
+        <div class="results-container hidden" id="resultsContainer">
+            <!-- Results will be displayed here -->
+        </div>
+    </div>
+
+    <script>
+        // Available genres that AI can choose from
+        const AVAILABLE_GENRES = [
+            "Habits", "Finance", "Leadership", "Mental health", "Motivational", 
+            "Physical Health", "Time Management", "Communication", "Self-Discovery", 
+            "Decision making", "Creativity", "Cognitive intelligence", "Behaviour", 
+            "Emotional Intelligence", "Innovation", "Philosophy", "Entrepreneurship"
+        ];
+
+        // API Base URL - automatically detects current domain
+        const API_BASE_URL = window.location.origin;
+
+        class BookRecommendationSystem {
+            constructor() {
+                this.initializeEventListeners();
+                this.debugMode = true; // Enable debug logging
+                this.checkServerHealth();
+            }
+
+            async checkServerHealth() {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/api/health`);
+                    const health = await response.json();
+                    this.log('Server health check:', health);
+                    
+                    if (!health.env.hasGroqKey || !health.env.hasSupabaseUrl || !health.env.hasSupabaseKey) {
+                        this.showError('Server configuration incomplete. Please check environment variables.');
+                    }
+                } catch (error) {
+                    this.log('Health check failed:', error);
+                    this.showError('Cannot connect to backend server. Please ensure the server is running.');
+                }
+            }
+
+            initializeEventListeners() {
+                const sendBtn = document.getElementById('sendBtn');
+                const promptInput = document.getElementById('promptInput');
+
+                sendBtn.addEventListener('click', () => this.handleSearch());
+                promptInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        this.handleSearch();
+                    }
+                });
+
+                // Auto-resize textarea
+                promptInput.addEventListener('input', () => {
+                    promptInput.style.height = 'auto';
+                    promptInput.style.height = Math.min(promptInput.scrollHeight, 200) + 'px';
+                });
+            }
+
+            log(message, data = null) {
+                if (this.debugMode) {
+                    console.log(`[DEBUG] ${message}`, data || '');
+                }
+            }
+
+            showDebugInfo(message) {
+                if (this.debugMode) {
+                    const debugDiv = document.createElement('div');
+                    debugDiv.className = 'bg-white bg-opacity-10 border border-white border-opacity-30 text-white p-2.5 rounded-lg my-2.5 text-xs font-mono';
+                    debugDiv.textContent = message;
+                    
+                    const container = document.getElementById('resultsContainer');
+                    container.parentNode.insertBefore(debugDiv, container);
+                    
+                    // Remove debug info after 2 seconds
+                    setTimeout(() => {
+                        debugDiv.remove();
+                    }, 2000);
+                }
+            }
+
+            // Extract individual highlights from the highlights text
+            extractHighlights(highlightsText) {
+                if (!highlightsText || typeof highlightsText !== 'string') {
+                    return [];
+                }
+
+                // Split by quotation marks and clean up
+                const highlights = highlightsText
+                    .split('"')
+                    .map(highlight => highlight.trim())
+                    .filter(highlight => highlight.length > 20) // Only keep substantial highlights
+                    .map(highlight => highlight.replace(/^[\s\n\r]+|[\s\n\r]+$/g, '')) // Clean whitespace
+                    .filter(highlight => highlight.length > 0);
+
+                return highlights;
+            }
+
+            generateAIPrompt(taskType, userPrompt, availableGenres = null, highlightData = null, totalCount = 0) {
+                const prompts = {
+                    genreAnalysis: {
+                        role: "You are a specialized AI assistant with expert knowledge of book genres and user intent analysis.",
+                        context: `Available genres: ${availableGenres}`,
+                        task: `Analyze the user's query and determine which book genres would be most relevant.`,
+                        process: `
+1. Carefully read the user's query to understand their needs, interests, or preferences.
+2. Scan the available genres for the best matches based on the query content.
+3. Prioritize genres where the benefits directly address the user's query.
+4. Select minimum 1 and maximum 3 genres that are most relevant.
+5. If the query is vague or unclear, choose the most general applicable genres.`,
+                        outputFormat: `
+- Your response MUST be a valid JSON object.
+- The JSON object must have a single key: "genres".
+- The value of "genres" must be an array of strings.
+- Each string must be the exact "Name" of a recommended genre.
+- Select minimum 1 and maximum 3 genres from the available list.
+- Example: {"genres": ["Mental health", "Habits", "Leadership"]}
+- If no matches: {"genres": []}
+- Do NOT include any other text, explanations, or markdown formatting.`,
+                        content: `User query: "${userPrompt}"\n\nSelected genres:`
+                    },
+
+                    highlightRanking: {
+                        role: "You are an expert content analyst specializing in matching book insights to user queries with surgical precision.",
+                        context: `You have ${totalCount} individual book highlights from multiple books. Your task is to find the most relevant highlights that directly answer or address the user's specific query.`,
+                        task: `Select the TOP 5 most relevant highlights that best answer the user's query. Multiple highlights from the same book are allowed if they're all highly relevant, but never select identical highlights.`,
+                        process: `
+1. Analyze the user's query to identify their specific need, problem, or area of interest.
+2. Evaluate each highlight for direct relevance to the query - how well does it answer or address what the user is asking?
+3. Score each highlight: HIGH (directly answers query), MEDIUM (related/helpful), LOW (tangentially related).
+4. Select only HIGH and strong MEDIUM scoring highlights.
+5. Rank selected highlights by relevance score (best matches first).
+6. It's acceptable to select multiple highlights from the same book if they're all highly relevant.
+7. Never select duplicate/identical highlights.
+8. Maximum 5 highlights total, but fewer is acceptable if only a few are truly relevant.`,
+                        outputFormat: `
+- Your response MUST be a valid JSON object.
+- The JSON object must have a single key: "recommendations".
+- The value must be an array of objects, each with "id" field.
+- Each "id" must match exactly one of the highlight IDs provided.
+- Order by relevance (best match first).
+- Maximum 5 recommendations, minimum 1.
+- Example: {"recommendations": [{"id": "highlight_3"}, {"id": "highlight_7"}, {"id": "highlight_1"}]}
+- Do NOT include any other text, explanations, or markdown formatting.`,
+                        content: `Available highlights:\n${highlightData}\n\nUser query: "${userPrompt}"\n\nBest matching highlights (ranked by relevance):`
+                    }
+                };
+
+                const selectedPrompt = prompts[taskType];
+                if (!selectedPrompt) {
+                    throw new Error(`Unknown task type: ${taskType}`);
+                }
+
+                return `# ROLE
+${selectedPrompt.role}
+
+# CONTEXT
+${selectedPrompt.context}
+
+# TASK
+${selectedPrompt.task}
+
+# PROCESS
+${selectedPrompt.process}
+
+# OUTPUT FORMAT
+${selectedPrompt.outputFormat}
+
+${selectedPrompt.content}`;
+            }
+
+            async callBackendAPI(endpoint, data) {
+                try {
+                    this.log(`Calling backend API: ${endpoint}`, data);
+                    
+                    const response = await fetch(`${API_BASE_URL}/api${endpoint}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(data)
+                    });
+
+                    this.log('Backend API response status:', response.status);
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        this.log('Backend API error:', errorData);
+                        throw new Error(errorData.error || `API error (${response.status})`);
+                    }
+
+                    const result = await response.json();
+                    this.log('Backend API response:', result);
+                    
+                    return result;
+                    
+                } catch (error) {
+                    this.log('Backend API call failed:', error);
+                    throw new Error(`Backend API call failed: ${error.message}`);
+                }
+            }
+
+            async handleSearch() {
+                const prompt = document.getElementById('promptInput').value.trim();
+                
+                if (!prompt) {
+                    this.showError('Please enter a prompt to get recommendations.');
+                    return;
+                }
+
+                this.showLoading(true);
+                this.clearResults();
+
+                try {
+                    this.showDebugInfo(`Step 1: Analyzing prompt for genres...`);
+                    
+                    // Step 1: Analyze prompt and determine genres
+                    const genrePrompt = this.generateAIPrompt('genreAnalysis', prompt, AVAILABLE_GENRES.join(', '));
+                    const genreResult = await this.callBackendAPI('/ai/analyze', { prompt: genrePrompt });
+                    const genres = genreResult.genres || [];
+                    
+                    this.log('Determined genres:', genres);
+                    this.showDebugInfo(`Found genres: ${genres.join(', ')}`);
+
+                    if (genres.length === 0) {
+                        throw new Error('No relevant genres found for your query.');
+                    }
+
+                    this.showDebugInfo(`Step 2: Fetching books from database...`);
+
+                    // Step 2: Get books from database by genres
+                    const books = await this.callBackendAPI('/books/search', { genres });
+                    this.log('Found books:', books.length);
+                    this.showDebugInfo(`Found ${books.length} books in database`);
+
+                    if (books.length === 0) {
+                        throw new Error('No books found for the determined genres.');
+                    }
+
+                    this.showDebugInfo(`Step 3: Extracting and analyzing individual highlights...`);
+
+                    // Step 3: Extract all individual highlights from all books
+                    const allHighlights = [];
+                    books.forEach((book, bookIndex) => {
+                        const highlights = this.extractHighlights(book.highlights);
+                        highlights.forEach((highlight, highlightIndex) => {
+                            allHighlights.push({
+                                id: `highlight_${bookIndex}_${highlightIndex}`,
+                                text: highlight,
+                                bookTitle: book.title,
+                                bookAuthor: book.author,
+                                bookIndex: bookIndex
+                            });
+                        });
+                    });
+
+                    this.log('Total extracted highlights:', allHighlights.length);
+                    this.showDebugInfo(`Extracted ${allHighlights.length} individual highlights from all books`);
+
+                    if (allHighlights.length === 0) {
+                        throw new Error('No valid highlights found in the books.');
+                    }
+
+                    this.showDebugInfo(`Step 4: AI analyzing each highlight for relevance...`);
+
+                    // Step 4: Prepare highlight data for AI analysis
+                    const highlightData = allHighlights.map(h => 
+                        `ID: ${h.id} | Book: "${h.bookTitle}" by ${h.bookAuthor} | Highlight: "${h.text}"`
+                    ).join('\n');
+
+                    // Step 5: Use AI to select the most relevant highlights
+                    const rankingPrompt = this.generateAIPrompt('highlightRanking', prompt, null, highlightData, allHighlights.length);
+                    const rankingResult = await this.callBackendAPI('/ai/analyze', { prompt: rankingPrompt });
+                    const selectedHighlightIds = (rankingResult.recommendations || []).map(rec => rec.id);
+
+                    this.log('AI selected highlight IDs:', selectedHighlightIds);
+
+                    // Step 6: Build final recommendations from selected highlights
+                    const recommendations = [];
+                    for (const highlightId of selectedHighlightIds) {
+                        const highlight = allHighlights.find(h => h.id === highlightId);
+                        if (highlight) {
+                            recommendations.push({
+                                title: highlight.bookTitle,
+                                author: highlight.bookAuthor,
+                                highlight: highlight.text
+                            });
+                        }
+                    }
+
+                    this.log('Final recommendations count:', recommendations.length);
+                    
+                    if (recommendations.length === 0) {
+                        throw new Error('No highlights match your query well enough to recommend.');
+                    }
+                    
+                    this.showDebugInfo(`Displaying ${recommendations.length} most relevant highlights (AI-curated)`);
+
+                    // Step 7: Display results
+                    this.displayRecommendations(recommendations);
+
+                } catch (error) {
+                    this.log('Error in handleSearch:', error);
+                    this.showError(error.message || 'An error occurred while getting recommendations.');
+                } finally {
+                    this.showLoading(false);
+                }
+            }
+
+            displayRecommendations(recommendations) {
+                const container = document.getElementById('resultsContainer');
+                
+                if (recommendations.length === 0) {
+                    this.showError('No relevant highlights found that match your query.');
+                    return;
+                }
+
+                // Display recommendations with single, most relevant highlights
+                container.innerHTML = recommendations.map((rec, index) => `
+                    <div class="bg-white bg-opacity-95 rounded-2xl p-6 mb-5 shadow-lg border-l-4 border-red-400 transition-transform duration-300 hover:-translate-y-1 hover:shadow-xl relative">
+                        <div class="absolute top-4 right-4 bg-teal-500 text-white text-xs px-2 py-1 rounded-full font-semibold">
+                            #${index + 1} Best Match
+                        </div>
+                        <div class="text-base leading-relaxed text-gray-600 bg-white bg-opacity-70 p-4 rounded-lg border-l-4 border-teal-400 italic mb-4 pr-20">"${this.escapeHtml(rec.highlight)}"</div>
+                        <div class="text-xl font-bold text-gray-800 mb-2">${this.escapeHtml(rec.title)}</div>
+                        <div class="text-base text-gray-600 italic">by ${this.escapeHtml(rec.author)}</div>
+                    </div>
+                `).join('');
+
+                container.style.display = 'block';
+                
+                // Clear debug info immediately after successful display
+                setTimeout(() => {
+                    const debugInfos = document.querySelectorAll('.bg-white.bg-opacity-10');
+                    debugInfos.forEach(info => info.remove());
+                }, 500);
+            }
+
+            showLoading(show) {
+                const loading = document.getElementById('loading');
+                const sendBtn = document.getElementById('sendBtn');
+                
+                loading.style.display = show ? 'block' : 'none';
+                sendBtn.disabled = show;
+            }
+
+            clearResults() {
+                const container = document.getElementById('resultsContainer');
+                container.style.display = 'none';
+                container.innerHTML = '';
+                
+                // Clear any existing error messages and debug info
+                const existingErrors = document.querySelectorAll('.bg-red-500');
+                const existingDebug = document.querySelectorAll('.bg-white.bg-opacity-10');
+                existingErrors.forEach(error => error.remove());
+                existingDebug.forEach(debug => debug.remove());
+            }
+
+            showError(message) {
+                this.clearResults();
+                
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'bg-red-500 bg-opacity-10 border border-red-500 border-opacity-30 text-red-400 p-4 rounded-lg my-5 text-center';
+                errorDiv.textContent = message;
+                
+                const container = document.getElementById('resultsContainer');
+                container.parentNode.insertBefore(errorDiv, container);
+                
+                this.log('Error displayed:', message);
+            }
+
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        }
+
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('Initializing Book Recommendation System...');
+            new BookRecommendationSystem();
+        });
+    </script>
+</body>
+</html>
